@@ -1,5 +1,8 @@
 BDDVDSubReader
 
+[![npm](https://img.shields.io/npm/v/bddvdsubreader?style=flat-square)](https://npmjs.com/bddvdsubreader)
+[![npm downloads](https://img.shields.io/npm/dm/bddvdsubreader?style=flat-square)](https://npmjs.com/bddvdsubreader)
+
 Usage:
 ```javascript
 import { VobSubReader, BDSupReader } from 'bddvdsubreader';
