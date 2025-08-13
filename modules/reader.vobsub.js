@@ -1,16 +1,72 @@
 import fs from 'node:fs';
-import { Buffer } from 'node:buffer';
+import BufferReader from './module.buf.js';
 import SPUImage from './module.spu.js';
 
 class VobSubParser {
-    constructor(){
-        this.index = {};
-        this.languages = [];
-        this.paragraphs = [];
-        this.vobSubPacks = [];
+    constructor(noIndex){
+        this.noIndex = noIndex;
     }
     
-    openSub(vobSubPath){
+    openFile(filePath){
+        const targetPath = filePath.replace(/\.(sub|idx)$/i, '');
+        const idxPath = targetPath + '.idx';
+        const subPath = targetPath + '.sub';
+        
+        if(!fs.existsSync(subPath)) throw new Error('File ".sub" not exists!');
+        const index = this.openIdx(idxPath);
+        
+        const subFile = fs.readFileSync(subPath);
+        const subSize = fs.statSync(subPath).size;
+        const subtitles = [];
+        
+        if (subSize % 0x800 > 0) throw new Error('File ".sub" bad file size');
+        let offset = 0;
+        
+        const reader = new BufferReader(subFile);
+        const psPack = new PSPackReader(reader.readBytes(0x800));
+        console.log(psPack);
+        
+        /*
+        while(offset < subSize){
+            const frameBuf = sub.subarray(offset);
+            const frameData = new VobSubPack(idx, {}, {}, frameBuf);
+            const extFrameData = frameData._readPack();
+            this.subtitles.push(extFrameData);
+            offset += extFrameData.pack_size;
+        }
+        */
+        
+        /*
+        while(seq < this.paragraphs.length){
+            const is_last = this.paragraphs.length < seq + 2 ? true : false;
+            const paragraph = this.paragraphs[seq];
+            const nextParagraph = is_last ? {} : this.paragraphs[seq + 1];
+            
+            const offsetStart = paragraph.filepos;
+            const offsetEnd = is_last ? subSize : nextParagraph.filepos;
+            const frameBuf = sub.subarray(offsetStart, offsetEnd);
+            
+            const frameData = new VobSubPack(this.index, paragraph, nextParagraph, frameBuf);
+            this.subtitles.push(frameData._readPack());
+            
+            seq++;
+        }
+        */
+    }
+    
+    openIdx(idxPath){
+        if(fs.existsSync(idxPath) && !this.noIndex){
+            const idx = fs.readFileSync(idxPath, 'utf-8');
+            const index = new Index(idx);
+            
+            return index;
+        }
+        
+        return {}; // { force_sp_size: true };
+    }
+    
+    /*
+    _openSub(vobSubPath){
         const subFile = vobSubPath + '.sub';
         if(fs.existsSync(subFile)){
             const subSize = fs.statSync(subFile).size;
@@ -51,8 +107,10 @@ class VobSubParser {
         
         return { subtitles: this.subtitles };
     }
+    */
     
-    open(vobSubPath){
+    /*
+    _open(vobSubPath){
         const idxFile = vobSubPath + '.idx';
         const subFile = vobSubPath + '.sub';
         if(fs.existsSync(idxFile) && fs.existsSync(subFile)){
@@ -108,22 +166,44 @@ class VobSubParser {
         
         return { languages: this.languages, subtitles: this.subtitles };
     }
+    */
+}
+
+class PSPackReader {
+    constructor(buffer) {
+        if(buffer.length % 0x800 > 0){
+            throw new Error('BAD MPEG-2 Pack!');
+        }
+        
+        const reader = new BufferReader(buffer);
+        
+        const psStartCode = reader.readUInt24BE();
+        const psPackId = reader.readUInt8();
+        
+        if(psStartCode !== 0x1 || psPackId !== 0xba){
+            throw new Error('[BAD] PS Packet Header');
+        }
+        
+        // System Clock Reference, skip parse
+        reader.skip(6);
+    }
 }
 
 class VobSubPack {
-    constructor(index, paragraph, nextParagraph, buffer) {
-        this.index = index || {};
-        this.paragraph = paragraph || {};
-        this.nextParagraph = nextParagraph || {};
-        this.buffer = buffer;
+    constructor(buffer, index) {
+        // this.index = index || {};
+        // this.paragraph = paragraph || {};
+        // this.nextParagraph = nextParagraph || {};
+        // this.buffer = buffer;
         
         if(this.buffer.length % 0x800 > 0){
             throw new Error('BAD MPEG-2 Pack!');
         }
         
-        this._resetOffsets();
+        // this._resetOffsets();
     }
     
+    /*
     _readBuf(size, returnRead){
         const res = this.buffer.subarray(this._offset, this._offset + size);
         if (!returnRead){
@@ -137,10 +217,7 @@ class VobSubPack {
         this._offset = 0;
         this._readOffset = 0;
     }
-    
-    _buf2bin(buf){
-        return buf.toJSON().data.map(b => b.toString(2).padStart(8, '0'));
-    }
+    */
     
     _readPtsFromBuf(buf) {
         const [b0, b1, b2, b3, b4] = buf;
@@ -156,6 +233,7 @@ class VobSubPack {
     }
     
     _readPack(){
+        /*
         this.data = {};
         this.data.forced = false;
         this.data.stream_id = this.paragraph.stream_index;
@@ -413,6 +491,7 @@ class VobSubPack {
         
         // return parsed frame data
         return this.data;
+        */
     }
 }
 
@@ -555,10 +634,8 @@ class Index {
 
 export default class VobSubReader {
     constructor(vobSubPath, noIndex = false){
-        const vobSubParser = new VobSubParser();
-        
-        const fn = noIndex ? 'openSub' : 'open';
-        const data = vobSubParser[fn](vobSubPath);
+        const vobSubParser = new VobSubParser(noIndex);
+        const data = vobSubParser.openFile(vobSubPath);
         return data;
     }
 }
