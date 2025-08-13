@@ -3,11 +3,12 @@ import { Buffer } from 'node:buffer';
 import SPUImage from './module.spu.js';
 
 class VobSubParser {
-    constructor(){
+    constructor(notPal){
         this.index = {};
         this.languages = [];
         this.paragraphs = [];
         this.vobSubPacks = [];
+        this.notPal = notPal ? true : false;
     }
     
     openSub(vobSubPath){
@@ -141,25 +142,6 @@ class VobSubPack {
         return buf.toJSON().data.map(b => b.toString(2).padStart(8, '0'));
     }
     
-    _readScr(binArr) {
-        // This 9-bit field, along with the system_clock_reference_base field,
-        // comprises the system clock reference (SCR).
-        // The system_clock_reference_base field is specified
-        // in units of 1/300 multiplied by 90 kHz.
-        // The system_clock_reference_extension is specified in units of 27 MHz.
-        // SCR indicates the intended time of arrival of the byte containing
-        // the last bit of the system_clock_reference_base.
-        const scrBin = parseInt([
-            binArr[0].substring(2, 5) + binArr[0].substring(6, 8),
-            binArr[1] + binArr[2].substring(0, 5) + binArr[2].substring(6, 8),
-            binArr[3] + binArr[4].substring(0, 5),
-        ].join(''), 2);
-        const scrBinExt = parseInt([
-            binArr[4].substring(6, 8) + binArr[5].substring(0, 7)
-        ].join(''), 2);
-        return (scrBin + scrBinExt) * 300 / 27000; // converted to 90kHz clock
-    }
-    
     _readPtsDts(binArr, notPal) {
         const ticksPerMs = notPal ? 89.99991 : 90;
         const ptsBin = parseInt([
@@ -175,10 +157,7 @@ class VobSubPack {
         this.data.forced = false;
         this.data.stream_id = this.paragraph.stream_index;
         
-        this.data.scr = 0;
         this.data.pts = 0;
-        this.data.dts = 0;
-        
         this.data.start_time = -1;
         this.data.end_time = -1;
         
@@ -196,13 +175,10 @@ class VobSubPack {
                 throw new Error('[BAD] PS Packet Header');
             }
             
-            // System Clock Reference
-            const sysClockRefBuf = this._readBuf(6);
-            const sysClockRefArr = this._buf2bin(sysClockRefBuf);
-            this.data.scr = this._readScr(sysClockRefArr);
+            // System Clock Reference, skip parse
+            this._offset += 6;
             
-            // Multiplexer Rate
-            // const programMuxRate = (this._readBuf(3).readUIntBE(0, 3) >> 2) / 50;
+            // Multiplexer Rate, skip parse
             this._offset += 3;
             
             // Reserved and Stuffing Length (5bit + 3bit)
@@ -222,18 +198,7 @@ class VobSubPack {
             
             // PES Header Main Data 0b10XXXXXX 0bXXXXXXXX
             const pesHeaderFlags         = this._readBuf(2).readUInt16BE();
-            // const pesScramblingControl   = (pesHeaderFlags >> 4 + 8) & 0b11;
-            // const pesPriority            = (pesHeaderFlags >> 3 + 8) & 0b1;
-            // const pesDataAlignmentFlag   = (pesHeaderFlags >> 2 + 8) & 0b1;
-            // const pesCopyrightFlag       = (pesHeaderFlags >> 1 + 8) & 0b1;
-            // const pesOriginalOrCopyFlag  = (pesHeaderFlags >> 8) & 0b1;
             const pstDtsFlags            = (pesHeaderFlags >> 6) & 0b11;
-            // const esClockReferenceFlag   = (pesHeaderFlags >> 5) & 0b1;
-            // const esRateFlag             = (pesHeaderFlags >> 4) & 0b1;
-            // const dsmTrickMode           = (pesHeaderFlags >> 3) & 0b1;
-            // const additionalCopyInfoFlag = (pesHeaderFlags >> 2) & 0b1;
-            // const crcFlag                = (pesHeaderFlags >> 1) & 0b1;
-            // const extensionFlag          = pesHeaderFlags & 0b1;
             
             // PES Header Data length
             const pesHeaderDataLength = this._readBuf(1).readUInt8();
@@ -250,9 +215,7 @@ class VobSubPack {
                     headerDataOffset += 5;
                 }
                 if (pstDtsFlags == 0b11){
-                    const dtsDataBuf = pesHeaderData.subarray(headerDataOffset, headerDataOffset + 5);
-                    const dtsDataBin = this._buf2bin(dtsDataBuf);
-                    this.data.dts = this._readPtsDts(dtsDataBin);
+                    // Skip DTS Parse
                     headerDataOffset += 5;
                 }
             }
@@ -444,9 +407,7 @@ class VobSubPack {
         this.data.rle = { tf: PXDtf, bf: PXDbf };
         
         // cleanup
-        delete this.data.scr;
         delete this.data.pts;
-        delete this.data.dts;
         
         // return parsed frame data
         return this.data;
@@ -595,7 +556,7 @@ export default class VobSubReader {
         const vobSubParser = new VobSubParser();
         
         const fn = noIndex ? 'openSub' : 'open';
-        const data = vobSubParser[fn](vobSubPath);
+        const data = vobSubParser[fn](vobSubPath, notPal);
         return data;
     }
 }
