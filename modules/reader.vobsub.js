@@ -3,12 +3,11 @@ import { Buffer } from 'node:buffer';
 import SPUImage from './module.spu.js';
 
 class VobSubParser {
-    constructor(notPal){
+    constructor(){
         this.index = {};
         this.languages = [];
         this.paragraphs = [];
         this.vobSubPacks = [];
-        this.notPal = notPal ? true : false;
     }
     
     openSub(vobSubPath){
@@ -16,13 +15,14 @@ class VobSubParser {
         if(fs.existsSync(subFile)){
             const subSize = fs.statSync(subFile).size;
             const sub = fs.readFileSync(subFile);
+            const idx = { force_sp_size: true };
             this.subtitles = [];
             
             let offset = 0;
             
             while(offset < subSize){
                 const frameBuf = sub.subarray(offset);
-                const frameData = new VobSubPack({ force_sp_size: true }, {}, {}, frameBuf);
+                const frameData = new VobSubPack(idx, {}, {}, frameBuf);
                 const extFrameData = frameData._readPack();
                 this.subtitles.push(extFrameData);
                 offset += extFrameData.pack_size;
@@ -142,14 +142,17 @@ class VobSubPack {
         return buf.toJSON().data.map(b => b.toString(2).padStart(8, '0'));
     }
     
-    _readPtsDts(binArr, notPal) {
-        const ticksPerMs = notPal ? 89.99991 : 90;
-        const ptsBin = parseInt([
-            binArr[0].substring(4, 7), 
-            binArr[1] + binArr[2].substring(0, 7),
-            binArr[3] + binArr[4].substring(0, 7),
-        ].join(''), 2) / ticksPerMs;
-        return ptsBin;
+    _readPtsFromBuf(buf) {
+        const [b0, b1, b2, b3, b4] = buf;
+        const pts =(
+            (BigInt(b0 & 0x0E) << 29n) | // PTS[32..30]
+            (BigInt(b1)        << 22n) | // PTS[29..22]
+            (BigInt(b2 & 0xFE) << 14n) | // PTS[21..15]
+            (BigInt(b3)        <<  7n) | // PTS[14..7]
+            (BigInt(b4 & 0xFE) >>  1n)   // PTS[6..0]
+        );
+        // PTS/DTS clock is 90 kHz → ms
+        return Number(pts) / 90;
     }
     
     _readPack(){
@@ -210,8 +213,7 @@ class VobSubPack {
                 
                 if(pstDtsFlags == 0b10 || pstDtsFlags == 0b11){
                     const ptsDataBuf = pesHeaderData.subarray(headerDataOffset, headerDataOffset + 5);
-                    const ptsDataBin = this._buf2bin(ptsDataBuf);
-                    this.data.pts = this._readPtsDts(ptsDataBin);
+                    this.data.pts = this._readPtsFromBuf(ptsDataBuf);
                     headerDataOffset += 5;
                 }
                 if (pstDtsFlags == 0b11){
@@ -552,11 +554,11 @@ class Index {
 }
 
 export default class VobSubReader {
-    constructor(vobSubPath, notPal = false, noIndex = false){
+    constructor(vobSubPath, noIndex = false){
         const vobSubParser = new VobSubParser();
         
         const fn = noIndex ? 'openSub' : 'open';
-        const data = vobSubParser[fn](vobSubPath, notPal);
+        const data = vobSubParser[fn](vobSubPath);
         return data;
     }
 }
