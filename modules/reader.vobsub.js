@@ -3,6 +3,8 @@ import BufferReader from './module.buf.js';
 import SPUImage from './module.spu.js';
 
 const PS_PACK_SIZE = 0x800;
+const PTS_CLOCK = 90;
+const MAX_DELAY = 8000;
 
 class VobSubParser {
     constructor(noIndex){
@@ -24,11 +26,14 @@ class VobSubParser {
         if (subSize % PS_PACK_SIZE > 0) throw new Error('File ".sub" bad file size');
         const reader = new BufferReader(subFile);
         
-        const vobPacks = new Map();
+        const vobPacks = [];
         while(reader.remaining() / PS_PACK_SIZE > 0){
-            const vobPack = new VobPackReader(vobPacks.size, index.paragraphs, reader);
-            vobPacks.set(vobPacks.size, vobPack);
+            const vobPack = new VobPackReader(vobPacks.length, index, reader);
+            const spuPack = new SPUPackReader(vobPacks.length, index, vobPack);
+            vobPacks.push(spuPack);
         }
+        
+        return { languages: index.languages, frames: vobPacks };
     }
     
     _openIdxText(idx){
@@ -46,16 +51,19 @@ class VobSubParser {
 }
 
 class VobPackReader {
-    constructor(packId, paragraphs, reader) {
+    constructor(packId, index, reader) {
         this.data = {
             forced: false,
             stream_id: null,
             pts: null,
             end: null,
-            spu: null,
+            enx: null,
+            spu: null
         };
         
-        let spuBuffer = Buffer.alloc(0);
+        const paragraphs = index.paragraphs;
+        let spuData = Buffer.alloc(0);
+        
         if(paragraphs.has(packId)){
             const cur = paragraphs.get(packId);
             if(cur.filepos !== reader.tell()) throw new Error('[BAD] FilePos Index Value!');
@@ -127,17 +135,17 @@ class VobPackReader {
             // save spuBuffer
             const spuChunkLength = (nextOffset - startOffset) - (reader.tell() - startOffset);
             const chunk = reader.readBytes(spuChunkLength);
-            spuBuffer = Buffer.concat([spuBuffer, chunk]);
+            spuData = Buffer.concat([spuData, chunk]);
             reader.seek(startOffset + 0x800);
             
             // check sizes
-            if(spuBuffer.readUInt16BE() < spuBuffer.length) throw new Error('[BAD] SPU Buffer Size');
+            if(spuData.readUInt16BE() < spuData.length) throw new Error('[BAD] SPU Buffer Size');
             
             // END
-            if(spuBuffer.readUInt16BE() === spuBuffer.length) break;
+            if(spuData.readUInt16BE() === spuData.length) break;
         }
         
-        this.data.spu = spuBuffer;
+        this.data.spu = spuData;
         return this.data;
     }
     
@@ -150,14 +158,168 @@ class VobPackReader {
             (BigInt(b3)        <<  7n) | // PTS[14..7]
             (BigInt(b4 & 0xFE) >>  1n)   // PTS[6..0]
         );
-        // PTS/DTS clock is 90 kHz → ms
-        return Number(pts) / 90;
+        return Number(pts) / PTS_CLOCK;
     }
 }
 
 class SPUPackReader {
-    constructor() {
+    constructor(packId, index, pack) {
+        const spuBuffer = new BufferReader(pack.spu);
+        const spuBufSize = spuBuffer.readUInt16BE();
+        delete pack.spu;
         
+        const ctrlOffset = spuBuffer.readUInt16BE();
+        spuBuffer.seek(ctrlOffset);
+        
+        const ctrl = [];
+        while(spuBuffer.tell() < spuBufSize){
+            const ctrlData = { delay: 0, commands: Buffer.alloc(0) };
+            ctrlData.delay = Math.round((spuBuffer.readUInt16BE() << 10) / PTS_CLOCK);
+            const ctrlOffset = spuBuffer.readUInt16BE();
+            if(ctrlOffset === spuBuffer.tell() - 4){
+                ctrlData.commands = new BufferReader(spuBuffer.buffer.subarray(spuBuffer.tell()));
+                ctrl.push(ctrlData);
+                break;
+            }
+            else{
+                ctrlData.commands = new BufferReader(spuBuffer.buffer.subarray(spuBuffer.tell(), ctrlOffset));
+                spuBuffer.seek(ctrlOffset);
+                ctrl.push(ctrlData);
+            }
+        }
+        
+        if(ctrl.length > 2){
+            throw new Error('[BAD] Too many command sequences');
+        }
+        
+        // set temp data
+        const tdata = {};
+        let PXDtf, PXDbf;
+        
+        // parse commands
+        let ctrlIndex = 0;
+        while (ctrlIndex < ctrl.length) {
+            const curCtrl = ctrl[ctrlIndex];
+            const cmdBuf = curCtrl.commands;
+            while(cmdBuf.remaining() > 0){
+                const cmd = cmdBuf.readUInt8();
+                
+                switch (cmd){
+                    case 0x00: // FSTA_DSP
+                        pack.forced = true;
+                        break;
+                    case 0x01: // STA_DSP
+                        if(pack.pts >= 0 && curCtrl.delay > 0){
+                            throw new Error('BAD COMMAND: Start Display!');
+                        }
+                        pack.pts += curCtrl.delay;
+                        break;
+                    case 0x02: // STP_DSP
+                        if(pack.end !== null && pack.end > 0){
+                            throw new Error('BAD COMMAND: End Display!');
+                        }
+                        pack.end = pack.pts + curCtrl.delay;
+                        break;
+                    case 0x03: // SET_COLOR
+                        // e2 e1   p b
+                        // 0   background (B)
+                        // 1   pattern (P)
+                        // 2   emphasis 1 (E1)
+                        // 3   emphasis 1 (E2)
+                        const cmd3data = cmdBuf.readUInt16BE();
+                        
+                        if(index.palette){
+                            tdata.palette = {
+                                b:  index.palette[cmd3data & 0xF],
+                                p:  index.palette[cmd3data >> 4 & 0xF],
+                                e1: index.palette[cmd3data >> 8 & 0xF],
+                                e2: index.palette[cmd3data >> 12 & 0xF],
+                            };
+                        }
+                        else{
+                            tdata.palette = {
+                                b:  { r: 0, g: 0, b: 0 },
+                                p:  { r: 255, g: 255, b: 255 },
+                                e1: { r: 255, g: 255, b: 255 },
+                                e2: { r: 0, g: 0, b: 0 },
+                            };
+                        }
+                        
+                        break;
+                    case 0x04: // SET_CONTR
+                        const cmd4data = cmdBuf.readUInt16BE();
+                        tdata.alpha = {
+                            b:  cmd4data & 0xF,
+                            p:  cmd4data >> 4 & 0xF,
+                            e1: cmd4data >> 8 & 0xF,
+                            e2: cmd4data >> 12 & 0xF,
+                        };
+                        
+                        break;
+                    case 0x05: // SET_DAREA
+                        // sx sx   sx ex   ex ex   sy sy   sy ey   ey ey
+                        // sx = starting X coordinate
+                        // ex = ending X coordinate
+                        // sy = starting Y coordinate
+                        // ey = ending Y coordinate
+                        const x = cmdBuf.readUInt24BE();
+                        const y = cmdBuf.readUInt24BE();
+                        
+                        tdata.pos = {
+                            left:   x >> 12,
+                            right:  x & 0xFFF,
+                            top:    y >> 12,
+                            bottom: y & 0xFFF,
+                        };
+                        
+                        if(tdata.pos.right < tdata.pos.left || tdata.pos.bottom < tdata.pos.top){
+                            throw new Error('[BAD] Invalid Bounding Box');
+                        }
+                        
+                        tdata.size = {};
+                        tdata.size.width = tdata.pos.right - tdata.pos.left + 1;
+                        tdata.size.height = tdata.pos.bottom - tdata.pos.top + 1;
+                        
+                        break;
+                    case 0x06: // SET_DSPXA
+                        const PXDtfOffset = cmdBuf.readUInt16BE();
+                        const PXDbfOffset = cmdBuf.readUInt16BE();
+                        
+                        PXDtf = spuBuffer.buffer.subarray(PXDtfOffset);
+                        PXDbf = spuBuffer.buffer.subarray(PXDbfOffset);
+                        
+                        break;
+                    case 0x07: // CHG_COLCON
+                        throw new Error('[BAD] COMMAND 0x07 NOT IMPLEMENTED!');
+                        break;
+                    case 0xFF: // CMD_END
+                        cmdBuf.skip(cmdBuf.remaining())
+                        break;
+                    default: // CMD_UNK
+                        throw new Error('[BAD] UNKNOWN COMMAND!');
+                }
+            }
+            // end command
+            ctrlIndex++;
+        }
+        
+        if(pack.end === null && index.paragraphs.has(packId+1)){
+            const next = index.paragraphs.get(packId+1);
+            pack.end = next.timestamp - 24;
+            pack.enx = pack.end - pack.pts;
+        }
+        if(pack.end === null || pack.end - pack.pts > MAX_DELAY){
+            pack.end = pack.pts + MAX_DELAY;
+            pack.enx = MAX_DELAY;
+        }
+        
+        pack.width = tdata.size.width;
+        pack.height = tdata.size.height;
+        const pic = new SPUImage(tdata.size.width, tdata.size.height);
+        pic.setPalette(tdata.palette, tdata.alpha);
+        pic.decompressRLEImage(PXDtf, PXDbf);
+        pack.rgba = pic.getPxData();
+        return pack;
     }
 }
 
@@ -266,7 +428,7 @@ class Index {
                         stream_index++;
                     }
                 }
-                this.languages.set(this.languages.size, { index: stream_index, id: language_id, title: language_name });
+                this.languages.set(stream_index, { id: language_id, title: language_name });
             }
             
             if(timeCodeLP.test(line)){
