@@ -227,23 +227,13 @@ class SPUPackReader {
                         // 2   emphasis 1 (E1)
                         // 3   emphasis 1 (E2)
                         const cmd3data = cmdBuf.readUInt16BE();
-                        
-                        if(index.palette){
-                            tdata.palette = {
-                                b:  index.palette[cmd3data & 0xF],
-                                p:  index.palette[cmd3data >> 4 & 0xF],
-                                e1: index.palette[cmd3data >> 8 & 0xF],
-                                e2: index.palette[cmd3data >> 12 & 0xF],
-                            };
-                        }
-                        else{
-                            tdata.palette = {
-                                b:  { r: 0, g: 0, b: 0 },
-                                p:  { r: 255, g: 255, b: 255 },
-                                e1: { r: 255, g: 255, b: 255 },
-                                e2: { r: 0, g: 0, b: 0 },
-                            };
-                        }
+                        // => 2 8 2 0
+                        tdata.palette = {
+                            b:  index.params.palette[cmd3data & 0xF],
+                            p:  index.params.palette[cmd3data >> 4 & 0xF],
+                            e1: index.params.palette[cmd3data >> 8 & 0xF],
+                            e2: index.params.palette[cmd3data >> 12 & 0xF],
+                        };
                         
                         break;
                     case 0x04: // SET_CONTR
