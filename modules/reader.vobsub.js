@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import BufferReader from './module.buf.js';
 import SPUImage from './module.spu.js';
 
+const PS_PACK_SIZE = 0x800;
+
 class VobSubParser {
     constructor(noIndex){
         this.noIndex = noIndex;
@@ -13,102 +15,134 @@ class VobSubParser {
         const subPath = targetPath + '.sub';
         
         if(!fs.existsSync(subPath)) throw new Error('File ".sub" not exists!');
-        const index = this.openIdx(idxPath);
+        const index = this.openIdxFile(idxPath);
         
         const subFile = fs.readFileSync(subPath);
         const subSize = fs.statSync(subPath).size;
         const subtitles = [];
         
-        if (subSize % 0x800 > 0) throw new Error('File ".sub" bad file size');
+        if (subSize % PS_PACK_SIZE > 0) throw new Error('File ".sub" bad file size');
         const reader = new BufferReader(subFile);
-        const psPacks = [];
         
-        while(reader.remaining() / 0x800 > 0){
-            const psPack = new PSPackReader(reader);
-            
-            break;
+        const vobPacks = new Map();
+        while(reader.remaining() / PS_PACK_SIZE > 0){
+            //console.log('[READ] Reading VobPack:', vobPacks.length+1);
+            const vobPack = new VobPackReader(vobPacks.size, index.paragraphs, reader);
+            vobPacks.set(vobPacks.size, vobPack);
         }
+        
+        console.log(vobPacks);
     }
     
-    openIdx(idxPath){
+    openIdxText(idx){
+        return new Index(idx);
+    }
+    
+    openIdxFile(idxPath){
         if(fs.existsSync(idxPath) && !this.noIndex){
             const idx = fs.readFileSync(idxPath, 'utf-8');
-            const index = new Index(idx);
-            
-            return index;
+            return new Index(idx);
         }
         
-        return {}; // { force_sp_size: true };
+        return new Index('');
     }
 }
 
-class PSPackReader {
-    constructor(psPacks, buffer) {
-        /*
-        if(buffer.length % 0x800 > 0){
-            throw new Error('BAD MPEG-2 Pack!');
+class VobPackReader {
+    constructor(packId, paragraphs, reader) {
+        this.data = {
+            forced: false,
+            stream_id: null,
+            pts: null,
+            end: null,
+            spu: null,
+        };
+        
+        let spuBuffer = Buffer.alloc(0);
+        if(paragraphs.has(packId)){
+            const cur = paragraphs.get(packId);
+            if(cur.filepos !== reader.tell()) throw new Error('[BAD] FilePos Index Value!');
+            this.data.stream_id = cur.stream_index;
+            this.data.pts = cur.timestamp;
         }
         
-        const reader = new BufferReader(buffer);
-        this.data = {};
+        while(true){
+            const startOffset = reader.tell();
+            
+            if(reader.remaining() / PS_PACK_SIZE < 1) throw new Error('[BAD] Remaining Buffer Size!');
+            if(reader.remaining() % PS_PACK_SIZE > 0) throw new Error('[BAD] Offset Buffer Position!');
+            
+            // PS Start
+            const psStartCode = reader.readUInt24BE();
+            const psPackId = reader.readUInt8();
+            
+            if(psStartCode !== 0x1 || psPackId !== 0xba){
+                throw new Error('[BAD] PS Packet Header');
+            }
+            
+            // System Clock Reference
+            reader.skip(6);
         
-        // PS Start
-        const psStartCode = reader.readUInt24BE();
-        const psPackId = reader.readUInt8();
+            // Multiplexer Rate
+            reader.skip(3);
         
-        if(psStartCode !== 0x1 || psPackId !== 0xba){
-            throw new Error('[BAD] PS Packet Header');
+            // Reserved and Stuffing Length (5bit + 3bit)
+            const psStuffingLength = reader.readUInt8() & 0b111;
+            reader.skip(psStuffingLength);
+            
+            // PES Start
+            const pesStartCode = reader.readUInt24BE();
+            const pesPackId = reader.readUInt8();
+        
+            if(pesStartCode !== 0x1 || pesPackId !== 0xbd){
+                throw new Error('[BAD] PES Packet Header');
+            }
+            
+            // PES Pack length
+            const pesPacketLength = reader.readUInt16BE();
+            const nextOffset = reader.tell() + pesPacketLength;
+            
+            // PES Header Main Data 0b10XXXXXX 0bXXXXXXXX
+            const pesHeaderFlags = reader.readUInt16BE();
+            const pstDtsFlags = (pesHeaderFlags >> 6) & 0b11;
+            const isHasPts = pstDtsFlags == 0b10 || pstDtsFlags == 0b11;
+            
+            // PES Header Data length
+            const pesHeaderDataLength = reader.readUInt8();
+            const pesHeaderData = reader.readBytes(pesHeaderDataLength);
+        
+            if(pesHeaderDataLength >= 5 && isHasPts){
+                const ptsDataBuf = pesHeaderData.subarray(0, 5);
+                const ptsValue = this._readPtsFromBuf(ptsDataBuf);
+                if(this.data.pts > -1 && ptsValue !== this.data.pts) throw new Error('[BAD] PTS Value');
+            }
+            
+            const stream_id = reader.readUInt8();
+            if (stream_id < 0x20 || stream_id > 0x40){
+                throw new Error('[BAD] Stream ID!');
+            }
+            
+            if(this.data.stream_id === null) this.data.stream_id = stream_id - 0x20;
+            if(stream_id - 0x20 !== this.data.stream_id) throw new Error('[BAD] Stream ID!');
+            
+            // save spuBuffer
+            const spuChunkLength = (nextOffset - startOffset) - (reader.tell() - startOffset);
+            const chunk = reader.readBytes(spuChunkLength);
+            spuBuffer = Buffer.concat([spuBuffer, chunk]);
+            reader.seek(startOffset + 0x800);
+            
+            // check sizes
+            if(spuBuffer.readUInt16BE() < spuBuffer.length) throw new Error('[BAD] SPU Buffer Size');
+            
+            // END
+            if(spuBuffer.readUInt16BE() === spuBuffer.length) break;
         }
         
-        // System Clock Reference
-        reader.skip(6);
-        
-        // Multiplexer Rate
-        reader.skip(3);
-        
-        // Reserved and Stuffing Length (5bit + 3bit)
-        const psStuffingLength = reader.readUInt8() & 0b111;
-        reader.skip(psStuffingLength);
-        
-        // PES Start
-        const pesStartCode = reader.readUInt24BE();
-        const pesPackId = reader.readUInt8();
-        
-        if(pesStartCode !== 0x1 || pesPackId !== 0xbd){
-            throw new Error('[BAD] PES Packet Header');
-        }
-        
-        // PES Pack length
-        const pesPacketLength = reader.readUInt16BE();
-        const nextOffset = reader.tell() + pesPacketLength;
-        
-        // PES Header Main Data 0b10XXXXXX 0bXXXXXXXX
-        const pesHeaderFlags = reader.readUInt16BE();
-        const pstDtsFlags = (pesHeaderFlags >> 6) & 0b11;
-        const isHasPts = pstDtsFlags == 0b10 || pstDtsFlags == 0b11;
-        
-        // PES Header Data length
-        const pesHeaderDataLength = reader.readUInt8();
-        const pesHeaderData = reader.readBytes(pesHeaderDataLength);
-        
-        if(pesHeaderDataLength >= 5 && isHasPts){
-            const ptsDataBuf = pesHeaderData.subarray(0, 5);
-            this.data.pts = this.readPtsFromBuf(ptsDataBuf);
-        }
-        
-        const stream_id = reader.readUInt8();
-        if (stream_id < 0x20 || stream_id > 0x40){
-            throw new Error('BAD Stream ID!');
-        }
-        
-        const dataBytesLength = nextOffset - reader.tell();
-        this.b
-        
+        this.data.spu = spuBuffer;
         return this.data;
-        */
     }
     
-    readPtsFromBuf(buf) {
+    _readPtsFromBuf(buf) {
         const [b0, b1, b2, b3, b4] = buf;
         const pts = (
             (BigInt(b0 & 0x0E) << 29n) | // PTS[32..30]
@@ -125,9 +159,19 @@ class PSPackReader {
 class Index {
     constructor(lines) {
         this.params = {};
-        this.languages = [];
-        this.paragraphs = [];
+        this.languages = new Map();
+        this.paragraphs = new Map();
         this._parseLines(lines.split('\n'));
+        
+        if(!this.params.palette){
+            this._parseLines([
+                'palette:'
+                + ' 000000, 0000ff, 00ff00, 0xff0000,'
+                + ' ffff00, ff00ff, 00ffff, 0xffffff,'
+                + ' 808000, 8080ff, 800080, 0x80ff80,'
+                + ' 008080, ff8080, 555555, 0xaaaaaa'
+            ]);
+        }
     }
 
     _parseLines(lines) {
@@ -217,7 +261,7 @@ class Index {
                         stream_index++;
                     }
                 }
-                this.languages.push({ index: stream_index, id: language_id, title: language_name });
+                this.languages.set(this.languages.size, { index: stream_index, id: language_id, title: language_name });
             }
             
             if(timeCodeLP.test(line)){
@@ -225,7 +269,7 @@ class Index {
                     return parseInt(v[1], v[0] == 'filepos' ? 16 : 10);
                 });
                 const timestamp = (h * 3600 + m * 60 + s) * 1000 + ms;
-                this.paragraphs.push({ stream_index, timestamp, filepos });
+                this.paragraphs.set(this.paragraphs.size, { stream_index, timestamp, filepos });
             }
         });
     }
