@@ -6,7 +6,7 @@ const PS_PACK_SIZE = 0x800;
 
 class VobSubParser {
     constructor(noIndex){
-        this.noIndex = noIndex;
+        this._noIndex = noIndex;
     }
     
     openFile(filePath){
@@ -15,7 +15,7 @@ class VobSubParser {
         const subPath = targetPath + '.sub';
         
         if(!fs.existsSync(subPath)) throw new Error('File ".sub" not exists!');
-        const index = this.openIdxFile(idxPath);
+        const index = this._openIdxFile(idxPath);
         
         const subFile = fs.readFileSync(subPath);
         const subSize = fs.statSync(subPath).size;
@@ -26,20 +26,17 @@ class VobSubParser {
         
         const vobPacks = new Map();
         while(reader.remaining() / PS_PACK_SIZE > 0){
-            //console.log('[READ] Reading VobPack:', vobPacks.length+1);
             const vobPack = new VobPackReader(vobPacks.size, index.paragraphs, reader);
             vobPacks.set(vobPacks.size, vobPack);
         }
-        
-        console.log(vobPacks);
     }
     
-    openIdxText(idx){
+    _openIdxText(idx){
         return new Index(idx);
     }
     
-    openIdxFile(idxPath){
-        if(fs.existsSync(idxPath) && !this.noIndex){
+    _openIdxFile(idxPath){
+        if(fs.existsSync(idxPath) && !this._noIndex){
             const idx = fs.readFileSync(idxPath, 'utf-8');
             return new Index(idx);
         }
@@ -155,6 +152,12 @@ class VobPackReader {
         );
         // PTS/DTS clock is 90 kHz → ms
         return Number(pts) / 90;
+    }
+}
+
+class SPUPackReader {
+    constructor() {
+        
     }
 }
 
