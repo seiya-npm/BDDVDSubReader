@@ -322,11 +322,11 @@ class Index {
         
         if(!this.params.palette){
             this._parseLines([
-                'palette:'
-                + ' 000000, 0000ff, 00ff00, 0xff0000,'
-                + ' ffff00, ff00ff, 00ffff, 0xffffff,'
-                + ' 808000, 8080ff, 800080, 0x80ff80,'
-                + ' 008080, ff8080, 555555, 0xaaaaaa'
+                'palette:' // From FFMPEG
+                + ' 000000, 0000ff, 00ff00, ff0000,'
+                + ' ffff00, ff00ff, 00ffff, ffffff,'
+                + ' 808000, 8080ff, 800080, 80ff80,'
+                + ' 008080, ff8080, 555555, aaaaaa'
             ]);
         }
     }
