@@ -114,7 +114,9 @@ class VobPackReader {
             if(pesHeaderDataLength >= 5 && isHasPts){
                 const ptsDataBuf = pesHeaderData.subarray(0, 5);
                 const ptsValue = this._readPtsFromBuf(ptsDataBuf);
-                if(this.data.pts > -1 && ptsValue !== this.data.pts) throw new Error('[BAD] PTS Value');
+                if(this.data.pts === null) this.data.pts = ptsValue;
+                
+                if(this.data.pts >= 0 && ptsValue !== this.data.pts) throw new Error('[BAD] PTS Value');
             }
             
             const stream_id = reader.readUInt8();
