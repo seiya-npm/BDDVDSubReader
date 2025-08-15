@@ -5,6 +5,7 @@ import SPUImage from './module.spu.js';
 const PS_PACK_SIZE = 0x800;
 const PTS_CLOCK = 90;
 const MAX_DELAY = 8000;
+const MS_DELAY = 24;
 
 class VobSubParser {
     constructor(noIndex){
@@ -26,14 +27,14 @@ class VobSubParser {
         if (subSize % PS_PACK_SIZE > 0) throw new Error('File ".sub" bad file size');
         const reader = new BufferReader(subFile);
         
-        const vobPacks = [];
+        const frames = [];
         while(reader.remaining() / PS_PACK_SIZE > 0){
-            const vobPack = new VobPackReader(vobPacks.length, index, reader);
-            const spuPack = new SPUPackReader(vobPacks.length, index, vobPack);
-            vobPacks.push(spuPack);
+            const vobPack = new VobPackReader(frames.length, index, reader);
+            const spuPack = new SPUPackReader(frames.length, index, vobPack);
+            frames.push(spuPack);
         }
         
-        return { languages: index.languages, frames: vobPacks };
+        return { languages: index.languages, frames };
     }
     
     _openIdxText(idx){
@@ -295,7 +296,7 @@ class SPUPackReader {
         
         if(pack.end === null && index.paragraphs.has(packId+1)){
             const next = index.paragraphs.get(packId+1);
-            pack.end = next.timestamp - 24;
+            pack.end = next.timestamp - MS_DELAY;
             pack.enx = pack.end - pack.pts;
         }
         if(pack.end === null || pack.end - pack.pts > MAX_DELAY){
