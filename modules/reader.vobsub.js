@@ -319,6 +319,7 @@ class Index {
         this.params = {};
         this.languages = new Map();
         this.paragraphs = new Map();
+        this._getLanguageName = new Intl.DisplayNames(['en'], {type: 'language', style: 'short'});
         this._parseLines(lines.split('\n'));
         
         if(!this.params.palette){
@@ -409,7 +410,7 @@ class Index {
             if(/^id\:/i.test(line) && line.length > 4){
                 const parts = line.split(/[:,\s]+/).filter(Boolean);
                 const language_id = parts[1];
-                const language_name = this._getLanguageName(language_id);
+                const language_name = this._getLanguageName.of(language_id);
                 if (parts.length > 3 && parts[2].toLowerCase() === 'index') {
                     const txt_lang_index = parseInt(parts[3], 10);
                     if (!isNaN(txt_lang_index)){
@@ -448,16 +449,6 @@ class Index {
             return { r, g, b, a };
         }
         return { r: 255, g: 255, b: 255 };
-    }
-    
-    _getLanguageName(language_id) {
-        const language_names = {
-            en: 'English',
-            es: 'Spanish',
-            fr: 'French',
-            de: 'German',
-        };
-        return language_names[language_id] || language_id;
     }
 }
 

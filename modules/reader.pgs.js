@@ -11,19 +11,6 @@ const TYPE = {
     END: 0x80,
 };
 
-const CSTATE = {
-    Normal: 0x00,
-    Point:  0x40,
-    Start:  0x80,
-    Cont:   0xC0,
-}
-
-const FLAG = {
-    First: 0x40,
-    Last:  0x80,
-    Both:  0xC0,
-}
-
 function getCONST(obj, value) {
     return Object.keys(obj).find(key => obj[key] === value) || 'Bad';
 }
@@ -45,10 +32,8 @@ class Segment {
 
 class DisplaySetState {
     constructor() {
-        this.sup = 0;         // SubPicture Number
         this.pts = null;      // PTS START
         this.pcs = null;      // Presentation Composition
-        this.wds = new Map(); // Window Definition
         this.pds = new Map(); // Palette Definition / PaletteId -> { [entryId]: { y, cr, cb, a } }
         this.ods = new Map(); // Object Definition / ObjectId -> { w, h, rle: Buffer, isComplete }
         this.ref = [];        // from PCS: [{ objectId, x, y, compositionFlag }]
@@ -60,7 +45,6 @@ class DisplaySetState {
     }
     resetForEpoch() {
         this.resetForComposition();
-        this.wds.clear();
         this.pds.clear();
         this.ods.clear();
     }
@@ -69,11 +53,9 @@ class DisplaySetState {
         const prevKey = newKey - 1;
         
         const record = {
-            sup: null,
             pts: this.pts,
             end: null,
             pcs: this.pcs,
-            //wds: new Map(this.wds),
             pds: new Map(this.pds),
             ods: new Map(this.ods),
             ref: this.ref.slice(),
@@ -88,8 +70,6 @@ class DisplaySetState {
             if (prev){
                 prev.nextKey = newKey;
                 if (prev.ref.length > 0){
-                    this.sup++;
-                    prev.sup = this.sup;
                     prev.end = this.pts;
                 }
             }
@@ -107,7 +87,7 @@ export default class BDSupReader {
     }
     
     _YCrCbA2RGBA(YCrCbA, isBT709) {
-        const [Y, Cr, Cb, A] = YCrCbA;
+        const [Y, Cr, Cb, a] = YCrCbA;
         const Y1 = Y - 16;
         const Cr1 = Cr - 128;
         const Cb1 = Cb - 128;
@@ -121,14 +101,14 @@ export default class BDSupReader {
         else{
             r = (298 * Y1 + 409 * Cr1 + 128) >> 8;
             g = (298 * Y1 - 100 * Cb1 - 208 * Cr1 + 128) >> 8;
-            let b = (298 * Y1 + 516 * Cb1 + 128) >> 8;
+            b = (298 * Y1 + 516 * Cb1 + 128) >> 8;
         }
         
         r = Math.max(0, Math.min(255, r));
         g = Math.max(0, Math.min(255, g));
         b = Math.max(0, Math.min(255, b));
         
-        return [r, g, b, A]; // [R, G, B, A]
+        return [r, g, b, a];
     }
     
     parsePCS(pts, dts, buf, state) {
@@ -190,34 +170,7 @@ export default class BDSupReader {
         state.pcs = pcs;
         
         if(buf.remaining() != 0){
-            console.log('parsePCS', state);
-            console.log(buf.remaining());
             throw new Error('Unexpected remaining Buffer Size in Presentation Composition Segment');
-        }
-    }
-    
-    parseWDS(pts, dts, buf, state) {
-        if(state.pts !== pts) throw new Error('Unexpected PTS in Window Definition Segment');
-        
-        buf = new BufferReader(buf);
-        const count = buf.readUInt8();
-        
-        for(const _ in [...Array(count)]){
-            const entryId = buf.readUInt8();
-            
-            const wds = {};
-            wds.pos_x  = buf.readUInt16BE();
-            wds.pos_y  = buf.readUInt16BE();
-            wds.w      = buf.readUInt16BE();
-            wds.h      = buf.readUInt16BE();
-            
-            state.wds.set(entryId, wds);
-        }
-        
-        if(buf.remaining() != 0){
-            console.log('parseWDS', state);
-            console.log(buf.remaining());
-            throw new Error('Unexpected remaining Buffer Size in Window Definition Segment');
         }
     }
     
@@ -248,8 +201,6 @@ export default class BDSupReader {
         state.pds.set(paletteId, { entries });
         
         if(buf.remaining() != 0){
-            console.log('parsePDS', state);
-            console.log(buf.remaining());
             throw new Error('Unexpected remaining Buffer Size in Palette Definition Segment');
         }
     }
@@ -267,7 +218,9 @@ export default class BDSupReader {
         buf.skip(1); // Skip version
         
         const seqFlag = buf.readUInt8();
-        if ((seqFlag & 0x80) !== 0) {
+        const isStart = (seqFlag & 0x80) !== 0;
+        
+        if (isStart) {
             state.ods.set(objectId, {
                 w: null,
                 h: null,
@@ -278,7 +231,7 @@ export default class BDSupReader {
         
         const cur = state.ods.get(objectId);
         
-        if ((seqFlag & 0x80) === 0) {
+        if (!isStart) {
             const remainingSliceLen = buf.remaining();
             
             if (!cur.rle) {
@@ -293,8 +246,7 @@ export default class BDSupReader {
             cur.rem -= remainingSliceLen;
             
             if(buf.remaining() != 0){
-                console.log('parseODS', state);
-                console.log(buf.remaining());
+                // can have several 'last' chunks?
                 throw new Error('Unexpected remaining Buffer Size in Object Definition Segment');
             }
             
@@ -315,14 +267,11 @@ export default class BDSupReader {
         
         const toCopy = buf.remaining();
         const chunk = buf.readBytes(toCopy);
-        const prevChunk = cur.rle;
         
         cur.rle = Buffer.concat([cur.rle, chunk]);
         cur.rem = rleBitmapLen - toCopy;
         
         if(buf.remaining() != 0){
-            console.log('parseODS', state);
-            console.log(buf.remaining());
             throw new Error('Unexpected remaining Buffer Size in Object Definition Segment');
         }
     }
@@ -347,7 +296,6 @@ export default class BDSupReader {
                         this.parsePCS(seg.pts, seg.dts, seg.data, state);
                         break;
                     case TYPE.WDS:
-                        // this.parseWDS(seg.pts, seg.dts, seg.data, state);
                         break;
                     case TYPE.PDS:
                         this.parsePDS(seg.pts, seg.dts, seg.data, state);

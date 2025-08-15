@@ -79,7 +79,9 @@ const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
             ptr += 2;
         }
         else if (strict) {
-            console.warn(`  - PTS: ${sup.pts}, SupNumber: ${sup.sup} - Excess RLE data: ${rleBuffer.length - ptr} bytes remaining, bytes: ${rleBuffer.slice(ptr).slice(0, 40).toString('hex')}...`);
+            const rem = rleBuffer.length - ptr;
+            const remBufHEX = rleBuffer.slice(ptr).slice(0, 40).toString('hex');
+            console.warn(`  - PTS: ${sup.pts} - Excess RLE data: ${rem} bytes remaining, bytes: ${remBufHEX}...`);
             throw new Error('Excess RLE data');
         }
     }
