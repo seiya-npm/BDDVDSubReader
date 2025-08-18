@@ -111,8 +111,8 @@ export default class BDSupReader {
         return [r, g, b, a];
     }
     
-    parsePCS(pts, dts, buf, state) {
-        if(state && state.pts !== null) throw new Error('Unexpected Presentation Composition Segment');
+    parsePCS(pts, buf, state) {
+        if(state.pts !== null) throw new Error('Unexpected Presentation Composition Segment');
         
         buf = new BufferReader(buf);
         const pcs = {};
@@ -125,7 +125,6 @@ export default class BDSupReader {
         
         const cstateBits = buf.readUInt8() & 0xC0;
         pcs.compositionState = cstateBits;
-        if(!state) return pcs;
         
         if (cstateBits === 0x00) {
             state.resetForComposition();
@@ -175,8 +174,9 @@ export default class BDSupReader {
         }
     }
     
-    parsePDS(pts, dts, buf, state) {
-        if(state.pts !== pts) throw new Error('Unexpected PTS in Palette Definition Segment');
+    parsePDS(pts, buf, state) {
+        if(state.pts === null) throw new Error('Unexpected Palette Definition Segment');
+        if(pts > state.pts) throw new Error(`Unexpected PTS in Palette Definition Segment: ${state.pts} vs ${pts}`);
         
         buf = new BufferReader(buf);
         
@@ -206,8 +206,9 @@ export default class BDSupReader {
         }
     }
     
-    parseODS(pts, dts, buf, state) {
-        if(state.pts !== pts) throw new Error('Unexpected PTS in Object Definition Segment');
+    parseODS(pts, buf, state) {
+        if(state.pts === null) throw new Error('Unexpected Object Definition Segment');
+        if(pts > state.pts) throw new Error(`Unexpected PTS in Object Definition Segment: ${state.pts} vs ${pts}`);
         
         buf = new BufferReader(buf);
         
@@ -277,6 +278,13 @@ export default class BDSupReader {
         }
     }
     
+    parseEND(pts, state, stateStorage){
+        if(state.pts === null) throw new Error('Unexpected End Definition Segment');
+        if(pts > state.pts) throw new Error(`Unexpected PTS in End Definition Segment: ${state.pts} vs ${pts}`);
+        
+        state.saveState(stateStorage);
+    }
+    
     readSegments() {
         const buffer = fs.readFileSync(this.filePath);
         const reader = new BufferReader(buffer);
@@ -294,28 +302,23 @@ export default class BDSupReader {
                     HasDTSValue = true;
                 }
                 
-                if(HasDTSValue) seg.dts = 0;
-                if(HasDTSValue && seg.type !== TYPE.PCS){
-                    seg.pts = state.pts;
-                }
-                
                 switch (seg.type) {
                     case TYPE.PCS:
-                        this.parsePCS(seg.pts, seg.dts, seg.data, state);
+                        this.parsePCS(seg.pts, seg.data, state);
                         break;
                     case TYPE.WDS:
                         break;
                     case TYPE.PDS:
-                        this.parsePDS(seg.pts, seg.dts, seg.data, state);
+                        this.parsePDS(seg.pts, seg.data, state);
                         break;
                     case TYPE.ODS:
-                        this.parseODS(seg.pts, seg.dts, seg.data, state);
+                        this.parseODS(seg.pts, seg.data, state);
                         break;
                     case TYPE.END:
-                        state.saveState(displaySets)
+                        this.parseEND(seg.pts, state, displaySets)
                         break;
                     default:
-                        throw new Error('Unexpected Unknown Segment');
+                        throw new Error('Unexpected Unknown Segment Type');
                 }
             }
         }
