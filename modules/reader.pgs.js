@@ -74,8 +74,6 @@ class DisplaySetState {
                 }
             }
         }
-        
-        this.resetForComposition();
     }
 }
 
@@ -113,6 +111,7 @@ export default class BDSupReader {
     
     parsePCS(pts, buf, state) {
         if(state.pts !== null) throw new Error('Unexpected Presentation Composition Segment');
+        state.pts = pts;
         
         buf = new BufferReader(buf);
         const pcs = {};
@@ -122,18 +121,7 @@ export default class BDSupReader {
         buf.skip(1); // Skip frameRate
         
         pcs.compositionNumber = buf.readUInt16BE();
-        
-        const cstateBits = buf.readUInt8() & 0xC0;
-        pcs.compositionState = cstateBits;
-        
-        if (cstateBits === 0x00) {
-            state.resetForComposition();
-        }
-        else{
-            state.resetForEpoch();
-        }
-        
-        state.pts = pts;
+        pcs.compositionState = buf.readUInt8() & 0xC0;
         
         buf.skip(1); // Skip Palette Update Flag
         pcs.paletteId = buf.readUInt8();
@@ -283,6 +271,7 @@ export default class BDSupReader {
         if(pts > state.pts) throw new Error(`Unexpected PTS in End Definition Segment: ${state.pts} vs ${pts}`);
         
         state.saveState(stateStorage);
+        state.resetForComposition();
     }
     
     readSegments() {
@@ -292,14 +281,16 @@ export default class BDSupReader {
         
         try {
             const state = new DisplaySetState();
-            let HasDTSValue = false;
             
             while (reader.tell() + 13 <= buffer.length) {
                 const seg = new Segment(reader);
                 
-                if(seg.dts > 0 && !HasDTSValue){
-                    console.warn('Warn: DTS was detected, results can be not valid!');
-                    HasDTSValue = true;
+                if(seg.type === TYPE.PCS){
+                    const pcfBuf = new BufferReader(seg.data);
+                    pcfBuf.skip(7);
+                    
+                    const cstateBits = pcfBuf.readUInt8() & 0xC0;
+                    if (cstateBits !== 0x00) state.resetForEpoch();
                 }
                 
                 switch (seg.type) {
