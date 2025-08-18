@@ -32,11 +32,11 @@ class VobSubParser {
             const vobPack = new VobPackReader(frames.length, index, reader);
             const spuPack = new SPUPackReader(frames.length, index, vobPack);
             
-            if(!index.languages.has(spuPack.track_id)){
-                index.languages.set(spuPack.track_id, { id: 'un', title: 'undefined' });
+            if(!index.languages.has(spuPack.track_index)){
+                index.languages.set(spuPack.track_index, { id: 'un', title: 'undefined' });
             }
             
-            if(frames.length > 0 && frames.at(-1).end === null && spuPack.track_id === frames.at(-1).track_id){
+            if(frames.length > 0 && frames.at(-1).end === null && spuPack.track_index === frames.at(-1).track_index){
                 frames.at(-1).end = spuPack.pts - MS_DELAY;
             }
             
@@ -67,7 +67,7 @@ class VobSubParser {
 class VobPackReader {
     constructor(packId, index, reader) {
         this.data = {
-            track_id: null,
+            track_index: null,
             forced: false,
             pts: null,
             end: null,
@@ -80,7 +80,7 @@ class VobPackReader {
         if(paragraphs.has(packId)){
             const cur = paragraphs.get(packId);
             if(cur.filepos !== reader.tell()) throw new Error('[BAD] FilePos Index Value!');
-            this.data.track_id = cur.track_id;
+            this.data.track_index = cur.track_index;
             this.data.pts = cur.timestamp;
         }
         
@@ -137,13 +137,13 @@ class VobPackReader {
                 if(this.data.pts >= 0 && ptsValue !== this.data.pts) throw new Error('[BAD] PTS Value');
             }
             
-            const track_id = reader.readUInt8();
-            if (track_id < 0x20 || track_id > 0x40){
+            const track_index = reader.readUInt8();
+            if (track_index < 0x20 || track_index > 0x40){
                 throw new Error('[BAD] Track ID!');
             }
             
-            if(this.data.track_id === null) this.data.track_id = track_id - 0x20;
-            if(track_id - 0x20 !== this.data.track_id) throw new Error('[BAD] Track ID!');
+            if(this.data.track_index === null) this.data.track_index = track_index - 0x20;
+            if(track_index - 0x20 !== this.data.track_index) throw new Error('[BAD] Track ID!');
             
             // save spuBuffer
             const spuChunkLength = (nextOffset - startOffset) - (reader.tell() - startOffset);
@@ -342,7 +342,7 @@ class Index {
         const alphaLP = /^alpha\: (?<value>\d+)%$/;
         const fadeLP = /^fadein\/out\: (?<fadein>\d+), (?<fadeout>\d+)$/;
         const timeCodeLP = /^timestamp\: (?<h>\d+):(?<m>\d+):(?<s>\d+):(?<ms>\d+), filepos: (?<filepos>[\da-fA-F]+)$/;
-        let track_id = -1;
+        let track_index = -1;
         
         lines.forEach(line => {
             line = line.trim();
@@ -416,13 +416,13 @@ class Index {
                 if (parts.length > 3 && parts[2].toLowerCase() === 'index') {
                     const txt_lang_index = parseInt(parts[3], 10);
                     if (!isNaN(txt_lang_index)){
-                        track_id = txt_lang_index;
+                        track_index = txt_lang_index;
                     }
                     else{
-                        track_id++;
+                        track_index++;
                     }
                 }
-                this.languages.set(track_id, { id: language_id, title: language_name });
+                this.languages.set(track_index, { id: language_id, title: language_name });
             }
             
             if(timeCodeLP.test(line)){
@@ -430,7 +430,7 @@ class Index {
                     return parseInt(v[1], v[0] == 'filepos' ? 16 : 10);
                 });
                 const timestamp = (h * 3600 + m * 60 + s) * 1000 + ms;
-                this.paragraphs.set(this.paragraphs.size, { track_id, timestamp, filepos });
+                this.paragraphs.set(this.paragraphs.size, { track_index, timestamp, filepos });
             }
         });
     }

@@ -19,7 +19,7 @@ Output:
         title: 'English', // Language Name
     },
     frames: (Array) => {
-        track_id: 0, // Frames from Track Index (Only for VobSub)
+        track_index: 0, // Frames from Track Index (Only for VobSub)
         forced: false, // if frame forced subtitle
         pts: 0, // show frame in milliseconds
         end: 0, // hide frame in milliseconds
