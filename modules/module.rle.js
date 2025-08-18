@@ -146,7 +146,8 @@ const composeFrame = (record) => {
         blitRGBA(frame, compW, compH, rgba, obj.w || w, obj.h || h, ref.pos_x, ref.pos_y);
     }
     return {
-        start: record.pts,
+        forced: pcs.forced,
+        pts: record.pts,
         end: record.end ?? null,
         width: compW,
         height: compH,
