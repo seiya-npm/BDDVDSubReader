@@ -12,7 +12,7 @@ const TYPE = {
 };
 
 function getCONST(obj, value) {
-    return Object.keys(obj).find(key => obj[key] === value) || 'Bad';
+    return Object.keys(obj).find(key => obj[key] === value) || 'BAD';
 }
 
 class Segment {
@@ -112,7 +112,7 @@ export default class BDSupReader {
     }
     
     parsePCS(pts, dts, buf, state) {
-        if(state.pts !== null) throw new Error('Unexpected Presentation Composition Segment');
+        if(state && state.pts !== null) throw new Error('Unexpected Presentation Composition Segment');
         
         buf = new BufferReader(buf);
         const pcs = {};
@@ -125,6 +125,7 @@ export default class BDSupReader {
         
         const cstateBits = buf.readUInt8() & 0xC0;
         pcs.compositionState = cstateBits;
+        if(!state) return pcs;
         
         if (cstateBits === 0x00) {
             state.resetForComposition();
@@ -169,7 +170,7 @@ export default class BDSupReader {
         state.ref = objRefs;
         state.pcs = pcs;
         
-        if(buf.remaining() != 0){
+        if(buf.remaining() !== 0){
             throw new Error('Unexpected remaining Buffer Size in Presentation Composition Segment');
         }
     }
@@ -200,7 +201,7 @@ export default class BDSupReader {
         
         state.pds.set(paletteId, { entries });
         
-        if(buf.remaining() != 0){
+        if(buf.remaining() !== 0){
             throw new Error('Unexpected remaining Buffer Size in Palette Definition Segment');
         }
     }
@@ -232,20 +233,20 @@ export default class BDSupReader {
         const cur = state.ods.get(objectId);
         
         if (!isStart) {
-            const remainingSliceLen = buf.remaining();
+            const remSliceLen = buf.remaining();
             
-            if (!cur.rle) {
+            if (cur.rle.length === 0) {
                 throw new Error('Additional RLE encountered but no existing RLE buffer');
             }
-            if (remainingSliceLen > cur.rem) {
+            if (remSliceLen > cur.rem) {
                 throw new Error('Additional RLE exceeds expected remaining length');
             }
             
-            const chunk = buf.readBytes(remainingSliceLen);
+            const chunk = buf.readBytes(remSliceLen);
             cur.rle = Buffer.concat([cur.rle, chunk]);
-            cur.rem -= remainingSliceLen;
+            cur.rem -= remSliceLen;
             
-            if(buf.remaining() != 0){
+            if(buf.remaining() !== 0){
                 // can have several 'last' chunks?
                 throw new Error('Unexpected remaining Buffer Size in Object Definition Segment');
             }
@@ -271,7 +272,7 @@ export default class BDSupReader {
         cur.rle = Buffer.concat([cur.rle, chunk]);
         cur.rem = rleBitmapLen - toCopy;
         
-        if(buf.remaining() != 0){
+        if(buf.remaining() !== 0){
             throw new Error('Unexpected remaining Buffer Size in Object Definition Segment');
         }
     }
@@ -282,15 +283,22 @@ export default class BDSupReader {
         const displaySets = new Map();
         
         try {
-            const segments = [];
+            const state = new DisplaySetState();
+            let HasDTSValue = false;
+            
             while (reader.tell() + 13 <= buffer.length) {
                 const seg = new Segment(reader);
-                segments.push(seg);
-            }
-            
-            const state = new DisplaySetState();
-            
-            for(const seg of segments){
+                
+                if(seg.dts > 0 && !HasDTSValue){
+                    console.warn('Warn: DTS was detected, results can be not valid!');
+                    HasDTSValue = true;
+                }
+                
+                if(HasDTSValue) seg.dts = 0;
+                if(HasDTSValue && seg.type !== TYPE.PCS){
+                    seg.pts = state.pts;
+                }
+                
                 switch (seg.type) {
                     case TYPE.PCS:
                         this.parsePCS(seg.pts, seg.dts, seg.data, state);
