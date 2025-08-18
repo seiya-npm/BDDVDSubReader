@@ -4,7 +4,7 @@ import SPUImage from './module.spu.js';
 
 const PS_PACK_SIZE = 0x800;
 const PTS_CLOCK = 90;
-const MAX_DELAY = 8000;
+const MAX_DELAY = 5000;
 const MS_DELAY = 24;
 
 class VobSubParser {
@@ -31,10 +31,23 @@ class VobSubParser {
         while(reader.remaining() / PS_PACK_SIZE > 0){
             const vobPack = new VobPackReader(frames.length, index, reader);
             const spuPack = new SPUPackReader(frames.length, index, vobPack);
+            
+            if(!index.languages.has(spuPack.track_id)){
+                index.languages.set(spuPack.track_id, { id: 'un', title: 'undefined' });
+            }
+            
+            if(frames.length > 0 && frames.at(-1).end === null && spuPack.track_id === frames.at(-1).track_id){
+                frames.at(-1).end = spuPack.pts - MS_DELAY;
+            }
+            
+            if(frames.length > 0 && frames.at(-1).end === null){
+                frames.at(-1).end = frames.at(-1).pts + MAX_DELAY;
+            }
+            
             frames.push(spuPack);
         }
         
-        return { languages: index.languages, frames };
+        return { tracks: index.languages, frames };
     }
     
     _openIdxText(idx){
@@ -54,12 +67,11 @@ class VobSubParser {
 class VobPackReader {
     constructor(packId, index, reader) {
         this.data = {
+            track_id: null,
             forced: false,
-            stream_id: null,
             pts: null,
             end: null,
-            enx: null,
-            spu: null
+            spu: null,
         };
         
         const paragraphs = index.paragraphs;
@@ -68,7 +80,7 @@ class VobPackReader {
         if(paragraphs.has(packId)){
             const cur = paragraphs.get(packId);
             if(cur.filepos !== reader.tell()) throw new Error('[BAD] FilePos Index Value!');
-            this.data.stream_id = cur.stream_index;
+            this.data.track_id = cur.track_id;
             this.data.pts = cur.timestamp;
         }
         
@@ -125,13 +137,13 @@ class VobPackReader {
                 if(this.data.pts >= 0 && ptsValue !== this.data.pts) throw new Error('[BAD] PTS Value');
             }
             
-            const stream_id = reader.readUInt8();
-            if (stream_id < 0x20 || stream_id > 0x40){
-                throw new Error('[BAD] Stream ID!');
+            const track_id = reader.readUInt8();
+            if (track_id < 0x20 || track_id > 0x40){
+                throw new Error('[BAD] Track ID!');
             }
             
-            if(this.data.stream_id === null) this.data.stream_id = stream_id - 0x20;
-            if(stream_id - 0x20 !== this.data.stream_id) throw new Error('[BAD] Stream ID!');
+            if(this.data.track_id === null) this.data.track_id = track_id - 0x20;
+            if(track_id - 0x20 !== this.data.track_id) throw new Error('[BAD] Track ID!');
             
             // save spuBuffer
             const spuChunkLength = (nextOffset - startOffset) - (reader.tell() - startOffset);
@@ -210,13 +222,13 @@ class SPUPackReader {
                         pack.forced = true;
                         break;
                     case 0x01: // STA_DSP
-                        if(pack.pts >= 0 && curCtrl.delay > 0){
+                        if(pack.pts === null || pack.pts >= 0 && curCtrl.delay > 0){
                             throw new Error('BAD COMMAND: Start Display!');
                         }
                         pack.pts += curCtrl.delay;
                         break;
                     case 0x02: // STP_DSP
-                        if(pack.end !== null && pack.end > 0){
+                        if(pack.pts === null || pack.end !== null && pack.end > 0){
                             throw new Error('BAD COMMAND: End Display!');
                         }
                         pack.end = pack.pts + curCtrl.delay;
@@ -294,16 +306,6 @@ class SPUPackReader {
             ctrlIndex++;
         }
         
-        if(pack.end === null && index.paragraphs.has(packId+1)){
-            const next = index.paragraphs.get(packId+1);
-            pack.end = next.timestamp - MS_DELAY;
-            pack.enx = pack.end - pack.pts;
-        }
-        if(pack.end === null || pack.end - pack.pts > MAX_DELAY){
-            pack.end = pack.pts + MAX_DELAY;
-            pack.enx = MAX_DELAY;
-        }
-        
         pack.width = tdata.size.width;
         pack.height = tdata.size.height;
         const pic = new SPUImage(tdata.size.width, tdata.size.height);
@@ -340,7 +342,7 @@ class Index {
         const alphaLP = /^alpha\: (?<value>\d+)%$/;
         const fadeLP = /^fadein\/out\: (?<fadein>\d+), (?<fadeout>\d+)$/;
         const timeCodeLP = /^timestamp\: (?<h>\d+):(?<m>\d+):(?<s>\d+):(?<ms>\d+), filepos: (?<filepos>[\da-fA-F]+)$/;
-        let stream_index = -1;
+        let track_id = -1;
         
         lines.forEach(line => {
             line = line.trim();
@@ -414,13 +416,13 @@ class Index {
                 if (parts.length > 3 && parts[2].toLowerCase() === 'index') {
                     const txt_lang_index = parseInt(parts[3], 10);
                     if (!isNaN(txt_lang_index)){
-                        stream_index = txt_lang_index;
+                        track_id = txt_lang_index;
                     }
                     else{
-                        stream_index++;
+                        track_id++;
                     }
                 }
-                this.languages.set(stream_index, { id: language_id, title: language_name });
+                this.languages.set(track_id, { id: language_id, title: language_name });
             }
             
             if(timeCodeLP.test(line)){
@@ -428,7 +430,7 @@ class Index {
                     return parseInt(v[1], v[0] == 'filepos' ? 16 : 10);
                 });
                 const timestamp = (h * 3600 + m * 60 + s) * 1000 + ms;
-                this.paragraphs.set(this.paragraphs.size, { stream_index, timestamp, filepos });
+                this.paragraphs.set(this.paragraphs.size, { track_id, timestamp, filepos });
             }
         });
     }

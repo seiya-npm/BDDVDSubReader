@@ -125,6 +125,7 @@ export default class BDSupReader {
         
         buf.skip(1); // Skip Palette Update Flag
         pcs.paletteId = buf.readUInt8();
+        pcs.forced = false;
         
         const objRefs = [];
         let objCount = buf.readUInt8();
@@ -136,7 +137,8 @@ export default class BDSupReader {
             const cropAndForcedByte = buf.readUInt8();
             const cropFlag = (cropAndForcedByte & 0x80) !== 0;
             const forcedFlag = (cropAndForcedByte & 0x40) !== 0;
-            if (forcedFlag) obj.is_forced = true;
+            if (forcedFlag) pcs.forced = true;
+            if (forcedFlag) obj.forced = true;
             
             obj.pos_x = buf.readUInt16BE();
             obj.pos_y = buf.readUInt16BE();
@@ -331,6 +333,6 @@ export default class BDSupReader {
             if (composed) frames.push(composed);
         }
         
-        return frames;
+        return { frames };
     }
 }
