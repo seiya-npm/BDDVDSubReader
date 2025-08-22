@@ -25,7 +25,7 @@ Output:
         end: 0, // hide frame in milliseconds
         width: 1920, // frame width
         height: 1080, // frame height
-        rgba: <Buffer>, // RGBA pixels buffer
+        rgba: <RGBAImage class>, // RGBAImage class, get() will return RGBA buffer
     }
 }
 ```

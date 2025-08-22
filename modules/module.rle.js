@@ -1,19 +1,19 @@
-const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
+const decodePGSIndexRLE = (pts, rleBuffer, w, h, strict = true) => {
     const pixels = new Uint8Array(w * h);
     let ptr = 0;
     let pos = 0;
-
+    
     while (pos < w * h && ptr < rleBuffer.length) {
         let x = pos % w;
         let y = Math.floor(pos / w);
-
+        
         let code = rleBuffer[ptr++];
-
+        
         if (code !== 0) {
             pixels[pos++] = code;
             continue;
         }
-
+        
         code = rleBuffer[ptr++];
         if (code === 0) {
             if (x !== 0) {
@@ -27,12 +27,12 @@ const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
             }
             continue;
         }
-
+        
         let length;
         let color = 0;
         const prefix = code >> 6;
         const lowBits = code & 0x3F;
-
+        
         switch (prefix) {
         case 0:
             length = lowBits;
@@ -59,7 +59,7 @@ const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
         default:
             throw new Error('Invalid RLE prefix');
         }
-
+        
         for (let i = 0; i < length && pos < w * h; i++) {
             x = pos % w;
             y = Math.floor(pos / w);
@@ -69,11 +69,11 @@ const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
             }
         }
     }
-
+    
     if (pos < w * h) {
         throw new Error(`RLE data incomplete: filled ${pos} of ${w * h} pixels`);
     }
-
+    
     if (ptr < rleBuffer.length) {
         if (ptr === rleBuffer.length - 2 && rleBuffer[ptr] === 0 && rleBuffer[ptr + 1] === 0) {
             ptr += 2;
@@ -81,16 +81,12 @@ const decodePGSIndexRLE = (sup, rleBuffer, w, h, strict = true) => {
         else if (strict) {
             const rem = rleBuffer.length - ptr;
             const remBufHEX = rleBuffer.slice(ptr).slice(0, 40).toString('hex');
-            console.warn(`  - PTS: ${sup.pts} - Excess RLE data: ${rem} bytes remaining, bytes: ${remBufHEX}...`);
+            console.warn(`  - PTS: ${pts} - Excess RLE data: ${rem} bytes remaining, bytes: ${remBufHEX}...`);
             throw new Error('Excess RLE data');
         }
     }
 
-    return {
-        index: pixels,
-        w,
-        h
-    };
+    return pixels;
 }
 
 const indicesToRGBA = (index, w, h, entries) => {
@@ -131,27 +127,60 @@ const blitRGBA = (dst, dw, dh, src, sw, sh, dx, dy) => {
     }
 };
 
+class RGBAImage {
+    #pts;
+    #compW;
+    #compH;
+    #plt;
+    #ods;
+    #ref;
+    
+    constructor(pts, w, h, plt, ods, ref) {
+        this.#pts = pts;
+        this.#compW = w;
+        this.#compH = h;
+        this.#plt = plt;
+        this.#ods = ods;
+        this.#ref = ref;
+    }
+    
+    get(){
+        const frame = Buffer.alloc(this.#compW * this.#compH * 4);
+        
+        for (const ref of this.#ref) {
+            const obj = this.#ods.get(ref.objectId);
+            
+            if (!obj || !obj.rle || obj.rle.length === 0) continue;
+            
+            const index = decodePGSIndexRLE(this.#pts, obj.rle, obj.w, obj.h);
+            const rgba = indicesToRGBA(index, obj.w, obj.h, this.#plt);
+            blitRGBA(frame, this.#compW, this.#compH, rgba, obj.w, obj.h, ref.pos_x, ref.pos_y);
+        }
+        
+        return frame;
+    }
+}
+
 const composeFrame = (record) => {
+    const pts = record.pts;
+    const end = record.end;
     const pcs = record.pcs;
+    if (!pts) return null;
+    if (!end) return null;
     if (!pcs) return null;
+    
     const palette = record.pds.get(pcs.paletteId);
     if (!palette) return null;
-    const { w: compW, h: compH } = pcs;
-    const frame = Buffer.alloc(compW * compH * 4);
-    for (const ref of record.ref) {
-        const obj = record.ods.get(ref.objectId);
-        if (!obj || !obj.rle || obj.rle.length === 0) continue;
-        const { index, w, h } = decodePGSIndexRLE(record, obj.rle, obj.w || w, obj.h || h);
-        const rgba = indicesToRGBA(index, obj.w || w, obj.h || h, palette.entries);
-        blitRGBA(frame, compW, compH, rgba, obj.w || w, obj.h || h, ref.pos_x, ref.pos_y);
-    }
+    
+    const frame = new RGBAImage(pts, pcs.w, pcs.h, palette.entries, record.ods, record.ref);
+    
     return {
         forced: pcs.forced,
-        pts: record.pts,
-        end: record.end ?? null,
-        width: compW,
-        height: compH,
-        rgba: frame
+        pts: pts,
+        end: end,
+        width: pcs.w,
+        height: pcs.h,
+        rgba: frame,
     };
 };
 

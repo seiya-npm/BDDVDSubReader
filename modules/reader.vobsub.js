@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import BufferReader from './module.buf.js';
-import SPUImage from './module.spu.js';
+import RGBAImage from './module.spu.js';
 
 const PS_PACK_SIZE = 0x800;
 const PTS_CLOCK = 90;
@@ -308,10 +308,16 @@ class SPUPackReader {
         
         pack.width = tdata.size.width;
         pack.height = tdata.size.height;
-        const pic = new SPUImage(tdata.size.width, tdata.size.height);
-        pic.setPalette(tdata.palette, tdata.alpha);
-        pic.decompressRLEImage(PXDtf, PXDbf);
-        pack.rgba = pic.getPxData();
+        
+        pack.rgba = new RGBAImage(
+            tdata.size.width,
+            tdata.size.height,
+            tdata.palette,
+            tdata.alpha,
+            PXDtf,
+            PXDbf,
+        );
+        
         return pack;
     }
 }

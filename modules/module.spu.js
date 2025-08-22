@@ -151,4 +151,27 @@ class SPUImage {
     }
 }
 
-export default SPUImage;
+export default class RGBAImage {
+    #width;
+    #height;
+    #palette;
+    #alpha;
+    #PXDtf;
+    #PXDbf;
+    
+    constructor(w, h, p, a, PXDtf, PXDbf) {
+        this.#width = w;
+        this.#height = h;
+        this.#palette = p;
+        this.#alpha = a;
+        this.#PXDtf = PXDtf;
+        this.#PXDbf = PXDbf;
+    }
+    
+    get(){
+        const pic = new SPUImage(this.#width, this.#height);
+        pic.setPalette(this.#palette, this.#alpha);
+        pic.decompressRLEImage(this.#PXDtf, this.#PXDbf);
+        return pic.getPxData();
+    }
+}
